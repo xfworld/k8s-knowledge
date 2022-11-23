@@ -51,18 +51,17 @@ graph TD
 - Minisfroum UM560
   - OS: Proxmox VE
   - VMs
-    - Envoy Proxy Server: 1c/1G 32G
-      - 边缘网关，设为 DMZ 主机面向公网提供访问
-      - 注：选择 envoy 单纯是为了熟悉 envoy 的使用，没这需求的建议用 traefik/caddy，更简单好用
+    - tailscale-gateway 1c/1G
+      - tailscale 在家里的路由节点，以 `Subnet router` 模式运行，这样就能在任意 tailscale 节点上访问家里的 homelab 跟 NAS 啦~
     - OpenMediaVault: 2c/8G 32G
       - 硬盘盒 Sata 直通到此虚拟机，作为家庭 NAS 系统，提供 SMB/SFTP/ISCSI 等局域网 NAS 服务
       - 也通过 docker-compose 运行一些需要访问硬盘盒数据的其他服务，比如
         - [filebrowser](https://github.com/filebrowser/filebrowser): 文件浏览器，支持查看、上传、下载
-        - [jellyfin](https://github.com/jellyfin/jellyfin) 影音系统
-        - [calibre-web](https://github.com/janeczku/calibre-web) 私有电子书系统，不再需要在每台设备之间同步各种电子书了。
-    - OpenWRT: 2c/1G 2G - host CPU
+        - [jellyfin](https://github.com/jellyfin/jellyfin): 影音系统
+        - [calibre-web](https://github.com/janeczku/calibre-web): 私有电子书系统，不再需要在每台设备之间同步各种电子书了。
+    - OpenWRT: 1c/1G 2G - host CPU
       - 作为软路由系统，实现网络加速、DDNS 等功能
-      - 安装 openclash、广告拦截插件、tailscale-vpn 等
+      - 安装 openclash、广告拦截插件
     - k3s single master 2c/4G 32G
       - 家庭网络，单 master 就够用了，省点性能开销
     - k3s worker node 4c/8G 32G * 2
@@ -70,7 +69,10 @@ graph TD
       - 跑各种其他 k8s 实验负载
     - docker-compose server 1c/2G 32G
       - 用于跑一些不需要访问硬盘盒，但是需要常驻的容器化应用
-      - programming toolbox 自托管版
+      - Envoy Gateway: 作为局域网所有小站点的网关（选择 envoy 单纯是为了熟悉 envoy 的使用）
+      - [uptime-kuma](https://github.com/louislam/uptime-kuma): 站点可访问性检测
+      - [dashy](https://github.com/lissy93/dashy) HomePage 页
+        - 在安装了如此多的自托管服务后，一个用于索引所有服务的 Homepage 就显得非常有必要了
       - [actionsflow](https://github.com/actionsflow/actionsflow): 完全兼容 Github Action 的自托管 workflow 服务
       - [excalidraw](https://github.com/excalidraw/excalidraw): 自托管白板项目
     - Home Assistant 2c/2G
@@ -101,19 +103,30 @@ graph TD
 
 k3s 集群里可以跑这些负载：
 
-- 数据库：etcd/mysql/postgresql/presto/minio
-- 可观测性：prometheus + vectoriametrics + grafana
-- [uptime-kuma](https://github.com/louislam/uptime-kuma): 站点可访问性检测
-- [dashy](https://github.com/lissy93/dashy) HomePage 页
-  - 在安装了如此多的自托管服务后，一个用于索引所有服务的 Homepage 就显得非常有必要了
+- 数据库：etcd/mysql/postgresql/minio/redis
+- 可观测性：
+  - 监控：vectoriametrics + grafana
+  - 日志：loki + grafana
+- 证书管理：cert-manager
+- 其他
+  - 服务网格：istio
+  - 配置部署与同步：argo-cd
+  - 多集群管理：karmada
+  - 集群网咯：cilium
+  - CICD: argo-workflows/tekton
+  - 等等
 
 局域网有了总共 22C44T CPU + 160G RAM 的算力后（必要时还能把我的联想笔记本也加入到集群， 再补充 8C16T CPU + 16G RAM +  Nvidia RTX 3070 GPU），已经可以直接在局域网玩一些需要高算力的任务了，比如说：
 
 - 大数据
-  - spark on k8s
-  - apache pulsar on k8s
-  - flink on eks
-  - redis cluster
+  - [airbyte](https://github.com/airbytehq/airbyte) 数据管道
+  - [alluxio](https://github.com/Alluxio/alluxio) 统一的数据存储接口
+  - Presto SQL 查询引擎，可对接多种数据源
+  - [doris](https://github.com/apache/doris) 高性能实时数仓（OLAP 分析型关系数据库）
+  - apache pulsar on k8s 分布式消息发布与订阅系统
+  - spark on k8s 离线数据分析
+  - flink on eks 实时数据分析
+  - superset 数据可视化平台
 - 区块链
   - 自建区块链集群
 
@@ -186,9 +199,12 @@ k3s 集群里可以跑这些负载：
 
 ## 远程访问
 
-打算用下面这个：
+前面提过了，使用的方案是 [Tailscale VPN](https://github.com/tailscale/tailscale)，它是一个基于 wireguard 的家庭 VPN，安装非常简单，基本傻瓜式操作。
 
-- [Tailscale VPN](https://github.com/tailscale/tailscale): 基于 wireguard 的家庭 VPN
+在 Homelab 上跑了一个 tailscale-gateway 作为 homelab 的入口节点，这样无论在哪，我的 Android、Macbook 等
+设备都可以无缝接入 Homelab~
+
+另外安全起见，虽然已经取得了公网 IP，暂时仍未启用任何面向公网的 Web 服务，仅将路由器 NAT 类型设为了「端口受限型」（未改为「全锥型」）。
 
 ## 监控告警
 
